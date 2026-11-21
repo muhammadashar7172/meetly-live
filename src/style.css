@@ -8,6 +8,11 @@
 .hd-tag{font-size:10px;letter-spacing:1px;color:#9ecbff;border:1px solid #2b4a70;background:#122740;border-radius:20px;padding:4px 8px}
 .tile.screen-tile{flex:1 1 100%;max-width:100%;height:min(58vh,620px)}
 .tile.screen-tile video{object-fit:contain;background:#05080e}
+/* while screen sharing the share takes over the whole stage */
+.stage.sharing .tiles{padding-bottom:0;align-items:stretch;align-content:stretch}
+.stage.sharing .tile.screen-tile{height:auto;max-height:none;flex:1 1 100%;border-color:#2f4c74;box-shadow:0 0 0 1px #3d7fd644,0 20px 60px #0008}
+.stage.sharing .empty-tile{display:none}
+.stage.sharing .drawing-layer{bottom:96px}
 .self-pip{position:absolute;right:28px;bottom:104px;width:178px;height:104px;border-radius:12px;overflow:hidden;border:1px solid #35495f;box-shadow:0 16px 40px #0009;z-index:7;background:#0d1522}
 .self-pip video{width:100%;height:100%;object-fit:cover}
 .self-pip span{position:absolute;left:7px;bottom:6px;background:#000a;border-radius:5px;padding:3px 7px;font-size:9px;display:flex;gap:5px;align-items:center;color:#e6f1ff}
@@ -36,3 +41,53 @@
 .draw-toolbar .dot.lg{width:11px;height:11px}
 .draw-toolbar .clear-btn{color:#ffb7c4;border-color:#6b3b4a;background:#341e29}
 @media(max-width:760px){.self-pip{width:120px;height:74px;right:12px;bottom:84px}.hd-tag{display:none}.draw-toolbar{left:12px;top:12px;max-width:calc(100% - 24px)}}
+
+/* ---------- side panel open/close ---------- */
+.panel-tabs{position:relative}
+.panel-close{margin-left:auto;border:0;background:#1a2739;color:#9fb2ca;border-radius:8px;padding:6px 7px;display:grid;place-items:center;flex-shrink:0}
+.panel-close:hover{background:#26364c;color:#e6f0ff}
+.panel-close svg{width:14px;height:14px}
+.panel-backdrop{display:none}
+@media(max-width:760px){
+  .panel-backdrop{display:block;position:absolute;inset:0;background:#04080eb0;backdrop-filter:blur(2px);z-index:7}
+  .side-panel{z-index:8;animation:panelIn .18s ease}
+  .panel-tabs{padding-right:6px}
+}
+@keyframes panelIn{from{transform:translateX(24px);opacity:.4}to{transform:none;opacity:1}}
+
+/* ---------- mobile responsive (phones) ---------- */
+@media(max-width:760px){
+  .meeting{height:100dvh}
+  .meeting-top{height:56px;padding:0 10px;gap:8px}
+  .meeting-top .brand{font-size:15px;gap:7px}
+  .meeting-top .logo{width:28px;height:28px;border-radius:9px}
+  .room-meta{gap:6px;font-size:11px;flex-wrap:nowrap;overflow:hidden}
+  .room-meta .invite{padding:6px 8px;font-size:11px}
+  .meeting-top-right{gap:4px}
+  .stage{padding:8px 8px 8px}
+  .tile{height:26vh;min-width:44%;max-width:calc(50% - 4px);border-radius:11px}
+  .tile.screen-tile{height:auto;min-height:34vh}
+  .tiles{gap:6px;padding-bottom:8px}
+  .tile-name{bottom:7px;left:7px;padding:4px 7px;font-size:10px}
+  /* controls: scrollable row so nothing gets cut on narrow phones */
+  .meeting-controls{height:auto;min-height:60px;padding:6px 6px;gap:6px;overflow-x:auto;justify-content:flex-start;scrollbar-width:none;border-radius:14px}
+  .meeting-controls::-webkit-scrollbar{display:none}
+  .control,.hangup{min-width:52px;height:48px;flex:0 0 auto;padding:0 8px;border-radius:11px}
+  .control span,.hangup span{font-size:8.5px}
+  .self-pip{width:104px;height:64px;right:10px;bottom:78px;border-radius:9px}
+  .stage.sharing .tile.screen-tile{min-height:44vh}
+  .side-panel{width:min(330px,92vw)}
+  .chat-compose{padding:10px}
+  .modal-actions{flex-direction:column}
+  .modal-actions button,.modal-actions a{min-width:0;width:100%}
+  .share-modal{padding:22px 18px 20px}
+}
+@media(max-width:420px){
+  .hero h1{font-size:36px;letter-spacing:-1.6px}
+  .benefits{gap:8px 14px}
+  .benefits span{font-size:11px}
+  .control span,.hangup span{display:none}
+  .control,.hangup{min-width:46px}
+  .tile{min-width:100%;max-width:100%;height:30vh}
+  .landing-footer{flex-direction:column;gap:6px;text-align:center}
+}

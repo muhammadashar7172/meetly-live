@@ -35,11 +35,14 @@ function App(){
   const [fullScreen,setFullScreen]=useState(false);
   const [connecting,setConnecting]=useState(false);
   const [shareOpen,setShareOpen]=useState(false);
+  /* side panel (chat/people) is openable & closable — hidden by default on phones */
+  const [panelOpen,setPanelOpen]=useState(()=>typeof window==='undefined'||window.innerWidth>760);
 
   const sigRef=useRef(null), pcs=useRef({}), streams=useRef({}), pendingIce=useRef({});
   const localVideo=useRef(null), selfVideo=useRef(null), canvasRef=useRef(null);
   const drawState=useRef(null), chatEnd=useRef(null), screenTrack=useRef(null);
   const baseStream=useRef(null), screenAudio=useRef(null), myId=useRef('');
+  const autoFs=useRef(false); // true when we entered fullscreen automatically for a screen share
 
   const codeGen=()=>Math.random().toString(36).slice(2,8).toUpperCase();
   const inviteUrl=roomCode?`${location.origin}${location.pathname}?room=${roomCode}`:location.origin;
@@ -190,12 +193,19 @@ function App(){
       screenTrack.current=null;screenAudio.current=null;setSharing(false);setScreenStream(null);
       const cam=baseStream.current?.getVideoTracks()[0]||null;
       Object.values(pcs.current).forEach(pc=>{pc.getSenders().filter(x=>x.track?.kind==='video').forEach(x=>x.replaceTrack(cam).catch(()=>{}));applyQuality(pc);});
+      /* we auto-entered fullscreen when the share began — leave it now */
+      if(autoFs.current){autoFs.current=false;document.exitFullscreen?.().catch(()=>{});}
       return;
     }
     try{
       const s=await navigator.mediaDevices.getDisplayMedia(SCREEN_CONSTRAINTS);
       const track=s.getVideoTracks()[0];
       screenTrack.current=track;setScreenStream(new MediaStream([track]));setSharing(true);
+      /* show the shared screen full screen while presenting */
+      if(!document.fullscreenElement){
+        const p=document.documentElement.requestFullscreen?.();
+        if(p&&p.then)p.then(()=>{autoFs.current=true;}).catch(()=>{});
+      }
       /* send the share in Full HD detail to everyone */
       Object.values(pcs.current).forEach(pc=>{
         const sender=pc.getSenders().find(x=>x.track?.kind==='video');
@@ -222,6 +232,12 @@ function App(){
     navigator.clipboard?.writeText(inviteUrl).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),1800)}).catch(()=>{});
   }
 
+  /* side panel open/close: same button toggles it shut */
+  function openPanel(tab){
+    if(panelOpen&&activeTab===tab){setPanelOpen(false);return;}
+    setActiveTab(tab);setPanelOpen(true);
+  }
+
   function toggleFullScreen(){
     if(!document.fullscreenElement)document.documentElement.requestFullscreen?.().catch(()=>{});
     else document.exitFullscreen?.();
@@ -231,10 +247,11 @@ function App(){
     sigRef.current?.leave();sigRef.current=null;
     Object.values(pcs.current).forEach(p=>p.close());pcs.current={};streams.current={};pendingIce.current={};
     screenTrack.current?.stop();screenAudio.current?.stop();
+    if(autoFs.current){autoFs.current=false;document.exitFullscreen?.().catch(()=>{});}
     baseStream.current?.getTracks().forEach(t=>t.stop());
     baseStream.current=null;screenTrack.current=null;screenAudio.current=null;
     setLocalStream(null);setParticipants([]);setInRoom(false);setSharing(false);setScreenStream(null);
-    setDrawing(false);setShareOpen(false);setMessages([]);
+    setDrawing(false);setShareOpen(false);setMessages([]);setPanelOpen(window.innerWidth>760);
   }
 
   /* ---------- shared whiteboard (students can draw live) ---------- */
@@ -347,7 +364,7 @@ function App(){
       </header>
 
       <div className="meeting-body">
-        <section className="stage">
+        <section className={`stage ${sharing?'sharing':''}`}>
           <div className="tiles">
             {sharing&&screenStream?(
               <div className="tile screen-tile">
@@ -411,17 +428,20 @@ function App(){
             <button className={`control ${drawing?'active':''}`} onClick={()=>setDrawing(!drawing)} title="Whiteboard">
               <PenTool/><span>{drawing?'Close drawing':'Draw'}</span>
             </button>
-            <button className="control" onClick={()=>setActiveTab('people')}><Users/><span>People</span><small>{participants.length+1}</small></button>
-            <button className={`control ${activeTab==='chat'?'active':''}`} onClick={()=>setActiveTab('chat')}><MessageCircle/><span>Chat</span></button>
+            <button className={`control ${panelOpen&&activeTab==='people'?'active':''}`} onClick={()=>openPanel('people')}><Users/><span>People</span><small>{participants.length+1}</small></button>
+            <button className={`control ${panelOpen&&activeTab==='chat'?'active':''}`} onClick={()=>openPanel('chat')}><MessageCircle/><span>Chat</span></button>
             <button className="control" onClick={()=>setShareOpen(true)}><Share2/><span>Invite</span></button>
             <button className="hangup" onClick={leave}><PhoneOff/><span>Leave</span></button>
           </div>
         </section>
 
+        {panelOpen&&<>
+        <div className="panel-backdrop" onClick={()=>setPanelOpen(false)}/>
         <aside className="side-panel">
           <div className="panel-tabs">
             <button className={activeTab==='chat'?'selected':''} onClick={()=>setActiveTab('chat')}><MessageCircle/>Chat</button>
             <button className={activeTab==='people'?'selected':''} onClick={()=>setActiveTab('people')}><Users/>People <span>{participants.length+1}</span></button>
+            <button className="panel-close" onClick={()=>setPanelOpen(false)} title="Close panel"><X/></button>
           </div>
 
           {activeTab==='chat'?(
@@ -466,6 +486,7 @@ function App(){
             <button className="copy-link" onClick={copyInvite}>{copied?<Check/>:<Copy/>}{copied?'Copied!':'Copy meeting link'}</button>
           </div>
         </aside>
+        </>}
       </div>
 
       {shareOpen&&(
