@@ -1,4 +1,7 @@
-# Meetly Live (React + Vite + Socket.IO)
+# Meetly Live (React + Vite + Firebase)
+
+Google-Meet style video meetings. **No backend server to host** — signaling runs on
+Firebase Realtime Database, video/audio goes peer-to-peer over WebRTC.
 
 ## Features
 - Join/create meeting room by code, or one invite link (`?room=CODE`) that opens straight into the meeting
@@ -10,17 +13,59 @@
 - Invite dialog with copy link + WhatsApp/Telegram share buttons
 - Responsive dark UI, real browser full screen toggle
 
-## Requirements
-Node.js 18+ recommended.
+## Architecture
+| Concern | Technology |
+|---|---|
+| UI | React 19 + Vite |
+| Signaling (presence, WebRTC offer/answer/ICE, chat, whiteboard) | Firebase Realtime Database |
+| Video / audio / screen | WebRTC (peer-to-peer) |
+| Hosting | Static host (e.g. Vercel) |
+
+`src/signaling.js` writes to these paths:
+
+```
+rooms/{code}/peers/{id}       presence  (auto-removed on disconnect)
+rooms/{code}/signals/{toId}   WebRTC offer / answer / ICE candidates
+rooms/{code}/chat/{id}        chat messages
+rooms/{code}/draw/{id}        whiteboard strokes
+rooms/{code}/clear/{id}       whiteboard clear
+```
+
+The whole `rooms/{code}` node is deleted automatically when the last participant leaves.
+
+## Firebase setup
+Config lives in `src/firebase.js`. RTDB security rules (Firebase console → Realtime
+Database → Rules) should allow read/write only under `rooms`:
+
+```json
+{
+  "rules": {
+    "rooms": { ".read": true, ".write": true },
+    ".read": false,
+    ".write": false
+  }
+}
+```
 
 ## Run locally
-1. Extract the zip and open its folder in a terminal.
-2. Install packages: `npm install`
-3. Start both frontend and signaling server: `npm start`
-4. Vite opens at `http://localhost:5173` (if it doesn't, visit it manually).
-5. Open the app in two browser tabs/devices and use the same room code to test joining.
+1. `npm install`
+2. `npm run dev`
+3. Vite opens at `http://localhost:5173` (if not, open it manually).
+4. Open two browser tabs and join with the same room code to test.
 
 For camera/mic/screen sharing, use localhost or HTTPS and approve the browser permission prompts.
 
-## Deployment note
-The signaling server in `server.js` must be hosted and reachable by clients; set the Socket.IO URL with a `VITE_SOCKET_URL` env var in a `.env` file (defaults to `http://localhost:3001` on localhost, same-origin elsewhere). WebRTC uses a public STUN server; a TURN server is recommended for reliable connections across restrictive networks. This is an early starter/prototype and is not hardened for production security, moderation, authentication, recording, or scaling.
+## Deploy
+```
+npm run build     # output in dist/
+```
+Deploy `dist/` to any static host. No server process, environment variables or
+database migrations are required.
+
+## Notes / limitations
+- WebRTC uses public STUN servers; a TURN server is recommended for reliable
+  connections across restrictive networks (Symmetric NAT, strict firewalls).
+- The `rooms` rules above are open by design for this demo — anyone with the
+  database URL can read/write rooms. Tighten them (e.g. require auth, validate
+  paths and payload sizes) before using this for anything sensitive.
+- No authentication, moderation, recording or scaling safeguards yet.

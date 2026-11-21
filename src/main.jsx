@@ -1,13 +1,11 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {createRoot} from 'react-dom/client';
-import {io} from 'socket.io-client';
+import {createSignaling} from './signaling';
 import {Video,VideoOff,Mic,MicOff,MonitorUp,MonitorOff,PhoneOff,Users,MessageCircle,PenTool,Eraser,Trash2,Copy,Check,Send,Shield,Plus,Link2,Maximize2,Minimize2,ChevronRight,Camera,Share2,X} from 'lucide-react';
 import './style.css';
 
 /* ---------- quality config: Full HD video + crystal clear voice ---------- */
 const ice={iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}]};
-const SOCKET_URL=import.meta.env.VITE_SOCKET_URL||
-  ((location.hostname==='localhost'||location.hostname==='127.0.0.1')?'http://localhost:3001':location.origin);
 const CAM_CONSTRAINTS={width:{ideal:1920},height:{ideal:1080},frameRate:{ideal:30,max:60}};
 const MIC_CONSTRAINTS={echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:2};
 const SCREEN_CONSTRAINTS={video:{width:{ideal:1920},height:{ideal:1080},frameRate:{ideal:30,max:60},cursor:'always'},audio:true};
@@ -38,7 +36,7 @@ function App(){
   const [connecting,setConnecting]=useState(false);
   const [shareOpen,setShareOpen]=useState(false);
 
-  const socketRef=useRef(null), pcs=useRef({}), streams=useRef({}), pendingIce=useRef({});
+  const sigRef=useRef(null), pcs=useRef({}), streams=useRef({}), pendingIce=useRef({});
   const localVideo=useRef(null), selfVideo=useRef(null), canvasRef=useRef(null);
   const drawState=useRef(null), chatEnd=useRef(null), screenTrack=useRef(null);
   const baseStream=useRef(null), screenAudio=useRef(null), myId=useRef('');
@@ -64,7 +62,7 @@ function App(){
     pcs.current[id]?.close();delete pcs.current[id];delete streams.current[id];delete pendingIce.current[id];
     setParticipants(p=>p.filter(x=>x.id!==id));
   }
-  function sendSignal(to,payload){socketRef.current?.emit('signal',{to,payload});}
+  function sendSignal(to,payload){sigRef.current?.sendSignal(to,payload);}
   const polite=from=>String(myId.current)>String(from); // perfect negotiation (avoids offer collisions)
 
   /* bitrate + encoding tuning => full HD video & clear voice */
@@ -150,21 +148,30 @@ function App(){
     baseStream.current=media;setLocalStream(media);
     setCamOn(!!media?.getVideoTracks().length);setMicOn(!!media?.getAudioTracks().length);
 
-    const socket=io(SOCKET_URL);socketRef.current=socket;
-    socket.on('connect',()=>{
-      myId.current=socket.id;
-      socket.emit('join-room',{room:code,name:name.trim()});
-      setInRoom(true);setConnecting(false);
-      setMessages([{system:true,text:`Meeting ${code} is live. Share the link to invite others.`}]);
-      if(created)setTimeout(()=>setShareOpen(true),700);
+    /* --- Firebase Realtime Database signaling (no server needed) --- */
+    const peerId=Math.random().toString(36).slice(2,10)+Date.now().toString(36);
+    const joinedAt=Date.now();
+    myId.current=peerId;
+    const sig=createSignaling({
+      room:code,name:name.trim(),id:peerId,joinedAt,
+      handlers:{
+        onPeerJoin:p=>{
+          addParticipant(p.id,p.name);
+          /* the peer who joined later sends the offer (avoids offer collisions) */
+          const iAmNewer=(joinedAt>p.joinedAt)||(joinedAt===p.joinedAt&&String(peerId)>String(p.id));
+          if(iAmNewer)createPC(p.id,true);
+        },
+        onPeerLeave:({id})=>removePeer(id),
+        onSignal:({from,payload})=>handleSignal(from,payload),
+        onChat:m=>setMessages(prev=>[...prev,m]),
+        onDraw:drawRemote,
+        onDrawClear:clearBoard
+      }
     });
-    socket.on('room-peers',peers=>{peers.forEach(p=>{addParticipant(p.id,p.name);createPC(p.id,true);});});
-    socket.on('peer-joined',p=>addParticipant(p.id,p.name));
-    socket.on('signal',({from,payload})=>handleSignal(from,payload));
-    socket.on('peer-left',({id})=>removePeer(id));
-    socket.on('chat-message',m=>setMessages(prev=>[...prev,m]));
-    socket.on('draw',drawRemote);
-    socket.on('draw-clear',clearBoard);
+    sigRef.current=sig;
+    setInRoom(true);setConnecting(false);
+    setMessages([{system:true,text:`Meeting ${code} is live. Share the link to invite others.`}]);
+    if(created)setTimeout(()=>setShareOpen(true),700);
   }
 
   function toggleMic(){
@@ -208,7 +215,7 @@ function App(){
     e?.preventDefault();
     if(!chatText.trim())return;
     const m={name:name||'You',text:chatText.trim(),time:new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),self:true};
-    setMessages(prev=>[...prev,m]);socketRef.current?.emit('chat-message',m);setChatText('');
+    setMessages(prev=>[...prev,m]);sigRef.current?.sendChat(m);setChatText('');
   }
 
   function copyInvite(){
@@ -221,7 +228,7 @@ function App(){
   }
 
   function leave(){
-    socketRef.current?.emit('leave-room');socketRef.current?.disconnect();
+    sigRef.current?.leave();sigRef.current=null;
     Object.values(pcs.current).forEach(p=>p.close());pcs.current={};streams.current={};pendingIce.current={};
     screenTrack.current?.stop();screenAudio.current?.stop();
     baseStream.current?.getTracks().forEach(t=>t.stop());
@@ -242,7 +249,7 @@ function App(){
     ctx.restore();
   }
   function clearBoard(){const c=canvasRef.current;c?.getContext('2d').clearRect(0,0,c.width,c.height);drawState.current=null;}
-  function clearAll(){clearBoard();socketRef.current?.emit('draw-clear');}
+  function clearAll(){clearBoard();sigRef.current?.sendClear();}
   function drawRemote(d){stroke(d);}
 
   function pointerDown(e){
@@ -256,7 +263,7 @@ function App(){
     const r=e.currentTarget.getBoundingClientRect();
     const x=(e.clientX-r.left)/r.width,y=(e.clientY-r.top)/r.height;
     const d={x1:drawState.current.x,y1:drawState.current.y,x2:x,y2:y,color:penColor,width:penSize,erase:eraser};
-    stroke(d);socketRef.current?.emit('draw',d);
+    stroke(d);sigRef.current?.sendDraw(d);
     drawState.current={x,y};
   }
   function pointerUp(){drawState.current=null;}
