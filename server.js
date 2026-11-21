@@ -3,6 +3,11 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 const app=express(); const httpServer=createServer(app);
 const io=new Server(httpServer,{cors:{origin:'*'}});
+
+// health check for hosting platforms (Render / Vercel)
+app.get('/',(req,res)=>res.json({ok:true,service:'meetly-signaling'}));
+app.get('/healthz',(req,res)=>res.send('ok'));
+
 io.on('connection',socket=>{
   socket.on('join-room',({room,name})=>{
     room=String(room||'').trim().toUpperCase().slice(0,32); name=String(name||'Guest').trim().slice(0,40);
@@ -19,4 +24,5 @@ io.on('connection',socket=>{
   socket.on('leave-room',()=>{const room=socket.data.room;if(room){socket.to(room).emit('peer-left',{id:socket.id});socket.leave(room);socket.data.room=null;}});
   socket.on('disconnect',()=>{const room=socket.data.room;if(room)socket.to(room).emit('peer-left',{id:socket.id});});
 });
-httpServer.listen(3001,()=>console.log('Meetly signaling server: http://localhost:3001'));
+const PORT=process.env.PORT||3001;
+httpServer.listen(PORT,()=>console.log(`Meetly signaling server running on port ${PORT}`));
