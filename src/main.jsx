@@ -22,6 +22,8 @@ function App(){
   const [micOn,setMicOn]=useState(true);
   const [sharing,setSharing]=useState(false);
   const [screenStream,setScreenStream]=useState(null);
+  /* peer id of whoever is presenting their screen (null = nobody remote sharing) */
+  const [remoteShare,setRemoteShare]=useState(null);
   const [drawing,setDrawing]=useState(false);
   const [penColor,setPenColor]=useState(PEN_COLORS[0]);
   const [penSize,setPenSize]=useState(4);
@@ -47,10 +49,26 @@ function App(){
   const codeGen=()=>Math.random().toString(36).slice(2,8).toUpperCase();
   const inviteUrl=roomCode?`${location.origin}${location.pathname}?room=${roomCode}`:location.origin;
 
-  /* local preview: screen while sharing, camera otherwise */
-  useEffect(()=>{if(localVideo.current)localVideo.current.srcObject=sharing&&screenStream?screenStream:localStream},[localStream,sharing,screenStream]);
+  /* ---------- stage layout: whoever shares gets the whole stage ---------- */
+  const presenterP=!sharing&&remoteShare?participants.find(p=>p.id===remoteShare):null;
+  const stageSharing=sharing||!!presenterP;          // any screen share (mine or theirs)
+  const stripPeers=participants.filter(p=>p.id!==remoteShare); // everyone minimized
+
+  /* local preview: screen while sharing, camera otherwise (re-attach whenever the
+     <video> element remounts between grid/strip layouts) */
+  useEffect(()=>{
+    const v=localVideo.current;if(!v)return;
+    const s=sharing&&screenStream?screenStream:localStream;
+    if(v.srcObject!==s)v.srcObject=s||null;
+    if(s){const p=v.play();if(p&&p.catch)p.catch(()=>{});}
+  },[localStream,sharing,screenStream,stageSharing,camOn]);
   /* floating self-view (camera) while your screen is shared */
-  useEffect(()=>{if(selfVideo.current)selfVideo.current.srcObject=!sharing?null:baseStream.current},[sharing,inRoom]);
+  useEffect(()=>{
+    const v=selfVideo.current;if(!v)return;
+    const s=sharing?baseStream.current:null;
+    if(v.srcObject!==s)v.srcObject=s||null;
+    if(s){const p=v.play();if(p&&p.catch)p.catch(()=>{});}
+  },[sharing,inRoom,camOn]);
   useEffect(()=>{chatEnd.current?.scrollIntoView({behavior:'smooth'})},[messages]);
   useEffect(()=>{const h=()=>setFullScreen(!!document.fullscreenElement);document.addEventListener('fullscreenchange',h);return()=>document.removeEventListener('fullscreenchange',h)},[]);
 
@@ -91,7 +109,16 @@ function App(){
     if(!baseStream.current?.getVideoTracks().length){try{pc.addTransceiver('video',{direction:'recvonly'})}catch(e){}}
     if(!baseStream.current?.getAudioTracks().length){try{pc.addTransceiver('audio',{direction:'recvonly'})}catch(e){}}
     pc.onicecandidate=e=>{if(e.candidate)sendSignal(peerId,{candidate:e.candidate})};
-    pc.ontrack=e=>{const st=e.streams[0];streams.current[peerId]=st;setParticipants(prev=>prev.map(p=>p.id===peerId?{...p,stream:st}:p));};
+    pc.ontrack=e=>{
+      /* the stream can arrive before onPeerJoin put the participant in state —
+         keep it either way, otherwise the camera/voice tile never appears */
+      const st=e.streams[0]||new MediaStream([e.track]);
+      streams.current[peerId]=st;
+      setParticipants(prev=>{
+        if(prev.some(p=>p.id===peerId))return prev.map(p=>p.id===peerId?{...p,stream:st}:p);
+        return [...prev,{id:peerId,name:'Guest',stream:st}];
+      });
+    };
     pc.onnegotiationneeded=()=>negotiate(peerId);
     if(initiator)negotiate(peerId);
     applyQuality(pc);
@@ -160,11 +187,16 @@ function App(){
       handlers:{
         onPeerJoin:p=>{
           addParticipant(p.id,p.name);
+          if(p.sharing)setRemoteShare(p.id); // they were already presenting when we arrived
           /* the peer who joined later sends the offer (avoids offer collisions) */
           const iAmNewer=(joinedAt>p.joinedAt)||(joinedAt===p.joinedAt&&String(peerId)>String(p.id));
           if(iAmNewer)createPC(p.id,true);
         },
-        onPeerLeave:({id})=>removePeer(id),
+        onPeerChange:p=>{
+          /* someone started/stopped sharing their screen */
+          setRemoteShare(prev=>p.sharing?p.id:(prev===p.id?null:prev));
+        },
+        onPeerLeave:({id})=>{setRemoteShare(prev=>prev===id?null:prev);removePeer(id);},
         onSignal:({from,payload})=>handleSignal(from,payload),
         onChat:m=>setMessages(prev=>[...prev,m]),
         onDraw:drawRemote,
@@ -191,6 +223,7 @@ function App(){
       screenTrack.current?.stop();screenAudio.current?.stop();
       Object.values(pcs.current).forEach(pc=>pc.getSenders().filter(x=>x.track&&x.track.kind==='audio'&&x.track===screenAudio.current).forEach(x=>{try{pc.removeTrack(x)}catch(e){}}));
       screenTrack.current=null;screenAudio.current=null;setSharing(false);setScreenStream(null);
+      sigRef.current?.setSharing(false); // tell everyone the presentation ended
       const cam=baseStream.current?.getVideoTracks()[0]||null;
       Object.values(pcs.current).forEach(pc=>{pc.getSenders().filter(x=>x.track?.kind==='video').forEach(x=>x.replaceTrack(cam).catch(()=>{}));applyQuality(pc);});
       /* we auto-entered fullscreen when the share began — leave it now */
@@ -201,6 +234,7 @@ function App(){
       const s=await navigator.mediaDevices.getDisplayMedia(SCREEN_CONSTRAINTS);
       const track=s.getVideoTracks()[0];
       screenTrack.current=track;setScreenStream(new MediaStream([track]));setSharing(true);
+      sigRef.current?.setSharing(true); // tell everyone to minimize & give us the stage
       /* show the shared screen full screen while presenting */
       if(!document.fullscreenElement){
         const p=document.documentElement.requestFullscreen?.();
@@ -250,7 +284,7 @@ function App(){
     if(autoFs.current){autoFs.current=false;document.exitFullscreen?.().catch(()=>{});}
     baseStream.current?.getTracks().forEach(t=>t.stop());
     baseStream.current=null;screenTrack.current=null;screenAudio.current=null;
-    setLocalStream(null);setParticipants([]);setInRoom(false);setSharing(false);setScreenStream(null);
+    setLocalStream(null);setParticipants([]);setInRoom(false);setSharing(false);setScreenStream(null);setRemoteShare(null);
     setDrawing(false);setShareOpen(false);setMessages([]);setPanelOpen(window.innerWidth>760);
   }
 
@@ -364,32 +398,58 @@ function App(){
       </header>
 
       <div className="meeting-body">
-        <section className={`stage ${sharing?'sharing':''}`}>
+        <section className={`stage ${stageSharing?'sharing':''}`}>
           <div className="tiles">
-            {sharing&&screenStream?(
-              <div className="tile screen-tile">
-                <video ref={localVideo} autoPlay muted playsInline/>
-                <div className="tile-name"><MonitorUp size={13}/> Your screen (You)</div>
-              </div>
-            ):localStream&&camOn?(
-              <div className="tile local">
-                <video ref={localVideo} autoPlay muted playsInline/>
-                <div className="tile-name"><Mic size={13}/>{name} (You)</div>
-              </div>
+            {stageSharing?(
+              /* ===== screen share active: presenter takes the whole stage ===== */
+              <>
+                <div className="tile screen-tile">
+                  {sharing?(
+                    <video ref={localVideo} autoPlay muted playsInline/>
+                  ):presenterP?(
+                    <VideoBox stream={presenterP.stream} name={presenterP.name} noLabel/>
+                  ):null}
+                  <div className="tile-name"><MonitorUp size={13}/>{sharing?'Your screen':presenterP?`${presenterP.name}'s screen`:'Shared screen'}</div>
+                </div>
+                {/* everyone else is minimized into a small strip along the bottom */}
+                <div className="mini-strip">
+                  {!sharing&&(
+                    <div className="tile mini local">
+                      {localStream&&camOn?(
+                        <video ref={localVideo} autoPlay muted playsInline/>
+                      ):(
+                        <div className="avatar-tile"><div className="avatar">{(name||'Y').charAt(0).toUpperCase()}</div></div>
+                      )}
+                      <div className="tile-name">{name||'You'} (You)</div>
+                    </div>
+                  )}
+                  {stripPeers.map(p=>(<div key={p.id} className="tile mini"><VideoBox stream={p.stream} name={p.name}/></div>))}
+                </div>
+              </>
             ):(
-              <div className="tile local avatar-tile">
-                <div className="avatar">{(name||'Y').charAt(0).toUpperCase()}</div>
-                <div className="tile-name">{name||'You'} (You)</div>
-              </div>
-            )}
-            {participants.map(p=>(<div key={p.id} className="tile"><VideoBox stream={p.stream} name={p.name}/></div>))}
-            {participants.length===0&&!sharing&&(
-              <div className="empty-tile">
-                <div className="empty-icon"><Users/></div>
-                <h3>Waiting for others to join</h3>
-                <p>Share the meeting link to invite people</p>
-                <button onClick={()=>setShareOpen(true)}>{copied?<Check/>:<Copy/>}{copied?'Copied':'Copy invite link'}</button>
-              </div>
+              /* ===== normal grid ===== */
+              <>
+                {localStream&&camOn?(
+                  <div className="tile local">
+                    <video ref={localVideo} autoPlay muted playsInline/>
+                    <div className="tile-name"><Mic size={13}/>{name} (You)</div>
+                  </div>
+                ):(
+                  <div className="tile local avatar-tile">
+                    <div className="avatar">{(name||'Y').charAt(0).toUpperCase()}</div>
+                    <div className="tile-name">{name||'You'} (You)</div>
+                  </div>
+                )}
+                {participants.map(p=>(<div key={p.id} className="tile"><VideoBox stream={p.stream} name={p.name}/></div>))}
+                {participants.length===0&&(
+                  <div className="empty-tile">
+                    <div className="empty-icon"><Users/></div>
+                    <h3>Waiting for others to join</h3>
+                    <p>Share the meeting link to invite people</p>
+                    <button onClick={()=>setShareOpen(true)}>{copied?<Check/>:<Copy/>}{copied?'Copied':'Copy invite link'}</button>
+                  </div>
+                )}
+              </>
             )}
           </div>
 
@@ -509,11 +569,21 @@ function App(){
   );
 }
 
-function VideoBox({stream,name}){
+function VideoBox({stream,name,noLabel}){
   const ref=useRef(null);
-  useEffect(()=>{if(ref.current&&stream)ref.current.srcObject=stream;},[stream]);
-  return stream?<><video ref={ref} autoPlay playsInline/><div className="tile-name"><Mic size={13}/>{name}</div></>
-    :<div className="avatar-tile"><div className="avatar">{name?.[0]?.toUpperCase()}</div><div className="tile-name">{name}</div></div>;
+  useEffect(()=>{
+    const v=ref.current;if(!v||!stream)return;
+    if(v.srcObject!==stream)v.srcObject=stream;
+    /* remote audio must actually start — autoplay policy can block it, so
+       retry now and again on the user's first click/keypress */
+    const tryPlay=()=>{const p=v.play();if(p&&p.catch)p.catch(()=>{});};
+    tryPlay();
+    document.addEventListener('pointerdown',tryPlay);
+    document.addEventListener('keydown',tryPlay);
+    return()=>{document.removeEventListener('pointerdown',tryPlay);document.removeEventListener('keydown',tryPlay);};
+  },[stream]);
+  if(!stream)return <div className="avatar-tile"><div className="avatar">{name?.[0]?.toUpperCase()}</div><div className="tile-name">{name}</div></div>;
+  return <><video ref={ref} autoPlay playsInline/>{!noLabel&&<div className="tile-name"><Mic size={13}/>{name}</div>}</>;
 }
 
 createRoot(document.getElementById('root')).render(<App/>);

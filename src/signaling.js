@@ -1,14 +1,17 @@
-import {db,ref,child,onChildAdded,onChildRemoved,onValue,set,remove,push,onDisconnect} from './firebase';
+import {db,ref,child,onChildAdded,onChildChanged,onChildRemoved,onValue,set,update,remove,push,onDisconnect} from './firebase';
 
 /**
  * Firebase Realtime Database signaling.
  *
  * Replaces the Socket.IO server so the app needs NO backend process:
- *   rooms/{code}/peers/{id}      -> {name, joinedAt}   (presence, auto-removed on disconnect)
+ *   rooms/{code}/peers/{id}      -> {name, joinedAt, sharing}  (presence, auto-removed on disconnect)
  *   rooms/{code}/signals/{toId}  -> {from, payload}    (WebRTC offer/answer/ICE)
  *   rooms/{code}/chat/{id}       -> message
  *   rooms/{code}/draw/{id}       -> whiteboard stroke
  *   rooms/{code}/clear/{id}      -> whiteboard clear
+ *
+ * `sharing` on a peer means that peer is presenting their screen, so every
+ * client can give the presenter the whole stage.
  *
  * The room node is deleted automatically once it becomes empty.
  *
@@ -27,7 +30,7 @@ export function createSignaling({room,name,id,joinedAt,handlers={}}){
   const knownPeers=new Set([id]);
 
   /* presence — server removes us even if the browser crashes */
-  set(myPeerRef,{name,joinedAt})
+  set(myPeerRef,{name,joinedAt,sharing:false})
     .then(()=>onDisconnect(myPeerRef).remove())
     .catch(e=>console.warn('presence write failed',e));
 
@@ -36,7 +39,13 @@ export function createSignaling({room,name,id,joinedAt,handlers={}}){
     if(snap.key===id)return;
     knownPeers.add(snap.key);
     const v=snap.val()||{};
-    handlers.onPeerJoin?.({id:snap.key,name:v.name,joinedAt:v.joinedAt||0});
+    handlers.onPeerJoin?.({id:snap.key,name:v.name,joinedAt:v.joinedAt||0,sharing:!!v.sharing});
+  }));
+  /* a peer started/stopped presenting their screen */
+  unsub.push(onChildChanged(peersRef,snap=>{
+    if(snap.key===id)return;
+    const v=snap.val()||{};
+    handlers.onPeerChange?.({id:snap.key,name:v.name,joinedAt:v.joinedAt||0,sharing:!!v.sharing});
   }));
   unsub.push(onChildRemoved(peersRef,snap=>{
     if(snap.key===id)return;
@@ -98,6 +107,10 @@ export function createSignaling({room,name,id,joinedAt,handlers={}}){
     },
     sendClear(){
       push(clearRef,{from:id,ts:Date.now()}).catch(()=>{});
+    },
+    /* broadcast that we are (or are not) presenting our screen */
+    setSharing(on){
+      update(myPeerRef,{sharing:!!on}).catch(e=>console.warn('sharing flag failed',e));
     },
     leave(){
       /* remove ourselves FIRST, then watch briefly for the room emptying out

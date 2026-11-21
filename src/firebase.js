@@ -1,7 +1,7 @@
 import {initializeApp} from 'firebase/app';
 import {
-  getDatabase,ref,child,onChildAdded,onChildRemoved,onValue,
-  set,remove,push,onDisconnect
+  getDatabase,ref,child,onChildAdded,onChildChanged,onChildRemoved,onValue,
+  set,update,remove,push,onDisconnect
 } from 'firebase/database';
 
 /* Firebase web config — public by design; security is enforced by RTDB security rules. */
@@ -23,6 +23,6 @@ const db=getDatabase(app);
    the same module instance (avoids "db._checkNotDeleted is not a function"). */
 export {
   db,
-  ref,child,onChildAdded,onChildRemoved,onValue,
-  set,remove,push,onDisconnect
+  ref,child,onChildAdded,onChildChanged,onChildRemoved,onValue,
+  set,update,remove,push,onDisconnect
 };
